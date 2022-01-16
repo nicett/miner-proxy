@@ -8,7 +8,7 @@
 * 所有代码开源, 不会存在任何抽水! 也不会开发反抽水(请尊重软件开发者)! 
 * 可以使用多次转发, 客户端 -> 服务器A端口转发 -> 服务器B服务端
 * 支持在客户端指定服务端连接矿池地址, 在客户端使用`-sr`参数指定矿池地址, 则服务端将会舍弃启动时的`-r`参数, 连接客户端的`-sr`参数的地址, 示例:`-sr asia-erg.2miners.com:18888`, 多个客户端可以使用同一个服务端
-
+* 性能: 得益于golang的并发支持, 在作者win 4核32G电脑上同时部署一个客户端/一个服务端, **同时使用1000个tcp连接模拟矿机, 运行2小时后平均每秒处理 36.4M数据**
 ## 安装
 ###  视频教程
 
@@ -25,6 +25,31 @@ https://user-images.githubusercontent.com/23651751/148649355-03d04371-efb9-4c80-
 
 
 ## 使用
+
+### 参数说明
+
+参数 | 示例 | 说明
+---|---|---
+-client | - | 是否是客户端, 该参数必须准确, 默认服务端, 只有 secret_key 不为空时需要区分
+-debug| - | 是否开启debug, 如果设置了这个参数, 那么将会开启更为详细的日志,, 建议测试时开启 
+-l| -l :9999 | 本地监听地址 (default ":9999")
+-r| -r 远程ip:端口 | 远程矿池地址或者远程本程序的监听地址 (default "localhost:80")
+-log_file| -log_file ./miner-proxy.log |  将日志输入到./miner-proxy.log, 建议使用绝对路径
+-secret_key| -secret_key 123456789 |  数据包加密密钥, 只有远程地址也是本服务时才可使用
+-sc | - |  是否使用混淆数据, 如果指定了, 将会不定时在server/client之间发送随机的混淆数据以及在挖矿数据中插入随机数据
+-sr | -sr baidu.com:80 |  客户端如果设置了这个参数, 那么服务端将会直接使用客户端的参数连接, 多个客户端互不干扰
+-rsh |- | 指定该参数后, 客户端将会10-60秒发送一次http请求到定义好的随机网站中
+-wx |-wx T_XXXX | 掉线微信通知token, 该参数只有在服务端生效, ,请在 https://wxpusher.zjiecode.com/admin/main/app/appToken 注册获取appToken
+-add_wx_user |- | 绑定微信账号到微信通知中, 详细文档查看[v0.3.4](https://github.com/PerrorOne/miner-proxy/releases/tag/v0.3.4)
+-offline|-offline 360 |掉线多少秒之后就发送微信通知,默认4分钟
+-install | - |   添加到系统服务, 并且开机自动启动
+-remove | - |   移除系统服务, 并且关闭开机自动启动
+-restart| - |    重启代理服务
+-start| -|   启动代理服务
+-stat| -|   查看代理服务状态
+-stop | - |    暂停代理服务
+-h | - |help
+
 
 ### win 端使用
 #### 启动服务, 无界面运行, 并且开机启动(推荐)
@@ -50,7 +75,8 @@ https://user-images.githubusercontent.com/23651751/148649355-03d04371-efb9-4c80-
 1. 安装服务: `完整目录/miner-proxy_linux_amd64 -l :5555 -r 矿池域名:矿池端口 -secret_key xxxx -sc -install`
 2. 启动服务: `完整目录/miner-proxy_linux_amd64 -start`
 3. 查看服务状态: `完整目录/miner-proxy_linux_amd64 -stat`
-4. 查看日志:  `journalctl -f -u miner-proxy` 
+4. 查看日志:  `journalctl -f -u miner-proxy`
+
 #### 通过supervisor启动(**可以多开, 需要修改miner-proxy.init为miner-proxy1.init, miner-proxy2.init, 以及[program:miner-proxy1], [program:miner-proxy2]**)
 1. 安装supervisor, 请自行搜索supervisor在您系统中的安装方式
 2. 写入配置文件, 输入命令: `vim /etc/supervisor/conf.d/miner-proxy.init`
@@ -66,33 +92,6 @@ ikillasgroup=true
 4. 按ESC键, 随后输入:wq回车后即可保存
 5. 输入命令: `supervisorctl reload && supervisorctl start miner-proxy && supervisorctl status`
 
-### 参数说明
-```
-  -client
-        是否是客户端, 该参数必须准确, 默认服务端, 只有 secret_key 不为空时需要区分
-  -debug
-        是否开启debug
-  -install
-        添加到系统服务, 并且开机自动启动
-  -l string
-        本地监听地址 (default ":9999")
-  -r string
-        远程代理地址或者远程本程序的监听地址 (default "localhost:80")
-  -remove
-        移除系统服务, 并且关闭开机自动启动
-  -restart
-        重启代理服务
-  -sc
-        是否使用混淆数据, 如果指定了, 将会不定时在server/client之间发送随机的混淆数据以及在挖矿数据中插入随机数据
-  -secret_key string
-        数据包加密密钥, 只有远程地址也是本服务时才可使用
-  -start
-        启动代理服务
-  -stat
-        查看代理服务状态
-  -stop
-        暂停代理服务
-```
 
 * 分为服务端以及客户端
 * 以f2pool挖erg为例
