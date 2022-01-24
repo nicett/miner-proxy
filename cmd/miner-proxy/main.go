@@ -1,10 +1,17 @@
 package main
 
 import (
+	_ "embed"
 	"flag"
 	"fmt"
+	"github.com/gin-gonic/gin"
+	"github.com/jmcvetta/randutil"
+	"github.com/kardianos/service"
+	"github.com/liushuochen/gotable"
+	"go.uber.org/zap/zapcore"
 	"log"
 	"miner-proxy/pkg"
+	"miner-proxy/pkg/middleware"
 	"miner-proxy/pkg/status"
 	"miner-proxy/proxy"
 	"miner-proxy/proxy/wxPusher"
@@ -13,11 +20,6 @@ import (
 	"os"
 	"strings"
 	"time"
-
-	"github.com/jmcvetta/randutil"
-	"github.com/kardianos/service"
-	"github.com/liushuochen/gotable"
-	"go.uber.org/zap/zapcore"
 )
 
 var (
@@ -26,7 +28,7 @@ var (
 	SendRemoteAddr       = flag.String("sr", "", "客户端如果设置了这个参数, 那么服务端将会直接使用客户端的参数连接")
 	secretKey            = flag.String("secret_key", "", "数据包加密密钥, 只有远程地址也是本服务时才可使用")
 	isClient             = flag.Bool("client", false, "是否是客户端, 该参数必须准确, 默认服务端, 只有 secret_key 不为空时需要区分")
-	UseSendConfusionData = flag.Bool("sc", false, "是否使用混淆数据, 如果指定了, 将会不定时在server/client之间发送随机的混淆数据以及在挖矿数据中插入随机数据")
+	UseSendConfusionData = true
 	debug                = flag.Bool("debug", false, "是否开启debug")
 	install              = flag.Bool("install", false, "添加到系统服务, 并且开机自动启动")
 	remove               = flag.Bool("remove", false, "移除系统服务, 并且关闭开机自动启动")
@@ -39,14 +41,14 @@ var (
 	wxPusherToken        = flag.String("wx", "", "掉线微信通知token, 该参数只有在服务端生效, ,请在 https://wxpusher.zjiecode.com/admin/main/app/appToken 注册获取appToken")
 	newWxPusherUser      = flag.Bool("add_wx_user", false, "绑定微信账号到微信通知中, 该参数只有在服务端生效")
 	offlineTime          = flag.Int64("offline", 60*4, "掉线多少秒之后, 发送微信通知")
+	api                  = flag.String("api", "0.0.0.0:4567", "网页端口, 0.0.0.0代表所有ip运行访问")
 )
 
 var (
 	// build 时加入
-	gitHash   string
 	gitCommit string
-	buildTime string
-	goVersion string
+	//go:embed web/index.html
+	indexHtml []byte
 )
 var (
 	reqeustUrls = []string{
@@ -72,7 +74,7 @@ func (p *proxyService) checkWxPusher() error {
 		if err != nil {
 			pkg.Fatal("获取二维码url失败: %s", err.Error())
 		}
-		pkg.Info("请复制网址, 在浏览器打开, 并使用微信进行扫码登陆: %s", qrUrl)
+		fmt.Printf("请复制网址, 在浏览器打开, 并使用微信进行扫码登陆: %s\n", qrUrl)
 		pkg.Input("您是否扫描完成?(y/n):", func(s string) bool {
 			if strings.ToLower(s) == "y" {
 				return true
@@ -87,7 +89,7 @@ func (p *proxyService) checkWxPusher() error {
 	}
 	table, _ := gotable.Create("uid", "微信昵称")
 	for _, v := range users {
-		table.AddRow(map[string]string{
+		_ = table.AddRow(map[string]string{
 			"uid":  v.UId,
 			"微信昵称": v.NickName,
 		})
@@ -101,6 +103,26 @@ func (p *proxyService) checkWxPusher() error {
 		}
 	}
 	return nil
+}
+
+func (p *proxyService) startHttpServer() {
+	if !*debug {
+		gin.SetMode(gin.ReleaseMode)
+	}
+	app := gin.New()
+	app.Use(gin.Recovery(), middleware.Cors())
+	app.GET("/api/client/status/", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"data": status.GetClientStatus(),
+		})
+		return
+	})
+	app.NoRoute(func(c *gin.Context) {
+		c.Data(http.StatusOK, "text/html", indexHtml)
+	})
+	if err := app.Run(*api); err != nil {
+		pkg.Panic(err.Error())
+	}
 }
 
 func (p *proxyService) Start(_ service.Service) error {
@@ -118,11 +140,12 @@ func (p *proxyService) randomRequestHttp() {
 		Timeout: time.Second * 10,
 	}
 	index, _ := randutil.IntRange(0, len(reqeustUrls))
+	pkg.Debug("http请求: ", reqeustUrls[index])
 	resp, _ := client.Get(reqeustUrls[index])
 	if resp == nil {
 		return
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 }
 
 func (p *proxyService) run() {
@@ -169,12 +192,15 @@ func (p *proxyService) run() {
 				status.Show(time.Duration(*offlineTime) * time.Second)
 			}
 		}()
+		go p.startHttpServer()
+	}
+	if *isClient {
+		go status.ShowDelay(time.Second * 30)
 	}
 
 	if *isClient && *randomSendHttp {
 		go p.randomRequestHttp()
 	}
-
 	for {
 		conn, err := listener.AcceptTCP()
 		if err != nil {
@@ -184,7 +210,7 @@ func (p *proxyService) run() {
 		p.SecretKey = *secretKey
 		p.IsClient = *isClient
 		p.SendRemoteAddr = *SendRemoteAddr
-		p.UseSendConfusionData = *UseSendConfusionData
+		p.UseSendConfusionData = UseSendConfusionData
 		go p.Start()
 	}
 }
@@ -212,23 +238,14 @@ A:
 
 func main() {
 	flag.Parse()
-	fmt.Println("版本信息: ")
-	fmt.Printf("git commit hash: %s\n", gitHash)
-	fmt.Printf("git commit message: %s\n", gitCommit)
-	if buildTime != "" {
-		t, err := time.Parse(time.ANSIC+" -0700", buildTime)
-		if err == nil {
-			fmt.Printf("build time: %s\n", t.Format("2006-01-02 15:04:05"))
-		}
-	}
-	fmt.Printf("golang version: %s\n", goVersion)
-
+	pkg.PrintHelp()
+	fmt.Printf("版本日志: %s\n", gitCommit)
 	if *debug {
 		pkg.InitLog(zapcore.DebugLevel, *logFile)
 	}
 
 	if !*debug {
-		pkg.InitLog(zapcore.WarnLevel, *logFile)
+		pkg.InitLog(zapcore.InfoLevel, *logFile)
 	}
 	if *newWxPusherUser || *wxPusherToken != "" {
 		if err := new(proxyService).checkWxPusher(); err != nil {
@@ -283,15 +300,6 @@ func main() {
 		if err := s.Stop(); err != nil {
 			log.Fatalln("停止代理服务失败", err)
 		}
-		log.Println("成功停止代理服务")
-		pkg.Input("是否需要移除代理服务?(y/n)", func(in string) bool {
-			if in == "y" {
-				if err := s.Uninstall(); err != nil {
-					log.Println("删除失败", err)
-				}
-			}
-			return true
-		})
 		return
 	}
 
